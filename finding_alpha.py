@@ -6,7 +6,7 @@ import surrogates as lr
 
 
 def execute(no_train, seed, sparsity, global_k, column_k, alpha):
-    # train a linear surrogate using Lasso for a given value of aloha and K
+    # train a linear surrogate using Lasso for a given value of alpha and K
     no_test = 100
     no_fs = 4
     no_items = 16
@@ -24,7 +24,7 @@ def execute(no_train, seed, sparsity, global_k, column_k, alpha):
 arr_res = np.zeros((195, 4))
 counter_row = 0
 # global
-for val_k in [2,4,8,16,24]:
+for val_k in [4,8,16,24]:
     for a in [0.5, 1, 2, 5, 10, 15, 20, 25, 50, 100, 150, 200, 250, 500, 1000]:
         obj = 0
         for s in range(25):
@@ -34,6 +34,7 @@ for val_k in [2,4,8,16,24]:
         arr_res[counter_row, 2] = a
         arr_res[counter_row, 3] = obj
         counter_row += 1
+        print(1)
 # row
 for val_k in [1,2,4,6]:
     for a in [0.5, 1, 2, 5, 10, 15, 20, 25, 50, 100, 150, 200, 250, 500, 1000]:
@@ -77,6 +78,7 @@ dict_glob = dict(zip(zip(r_glob['type_of_k (1=glob 2=row 3=col)'], r_glob['value
 dict_col = dict(zip(zip(r_col['type_of_k (1=glob 2=row 3=col)'], r_col['value_of_k']), r_col['value_of_alpha']))
 dict_row = dict(zip(zip(r_row['type_of_k (1=glob 2=row 3=col)'], r_row['value_of_k']), r_row['value_of_alpha']))
 dict_all = dict_glob | dict_col | dict_row
+dict_for_json = {str(k): v for k, v in dict_all.items()}
 with open("dict_alpha_values.json", "w") as file:
-    json.dump(dict_all, file)
+    json.dump(dict_for_json, file)
 

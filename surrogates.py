@@ -5,6 +5,9 @@ from gurobipy import *
 from datetime import datetime
 from sklearn.tree import DecisionTreeClassifier
 from sklearn.linear_model import Lasso
+from sklearn.linear_model import MultiTaskLasso
+from sklearn.linear_model import LinearRegression
+from sklearn.preprocessing import MinMaxScaler
 
 
 class Instance:
@@ -124,7 +127,8 @@ def make_instance(no_train, no_test, no_items, no_fs, seed, if_parameter="all"):
                 instance_feats_train[i, 6*no_fs + fs] = max(profits_train[i, j] for j in grouping[fs])
                 instance_feats_train[i, 7*no_fs + fs] = sum(weights_train[i, j] for j in grouping[fs])/sum(weights_train[i, j] for j in range(no_items))
                 instance_feats_train[i, 8*no_fs + fs] = sum(profits_train[i, j] for j in grouping[fs])/sum(profits_train[i, j] for j in range(no_items))
-                instance_feats_train[i, 9*no_fs + fs] = instance_feats_train[i, 1*no_fs + fs]/(sum(profits_train[i,j] for j in range(no_items))/sum(weights_train[i,j] for j in range(no_items)))
+                # instance_feats_train[i, 9*no_fs + fs] = instance_feats_train[i, 1*no_fs + fs]/(sum(profits_train[i,j] for j in range(no_items))/sum(weights_train[i,j] for j in range(no_items)))
+                instance_feats_train[i, 9*no_fs + fs] = instance_feats_train[i, fs]/(sum(profits_train[i,j] for j in range(no_items))/sum(weights_train[i,j] for j in range(no_items)))
             for i in range(no_test):
                 instance_feats_test[i, fs] = sum(profits_test[i,j] for j in grouping[fs])/sum(weights_test[i,j] for j in grouping[fs])
                 instance_feats_test[i, 1*no_fs + fs] = sum(weights_test[i, j] for j in grouping[fs])
@@ -135,14 +139,15 @@ def make_instance(no_train, no_test, no_items, no_fs, seed, if_parameter="all"):
                 instance_feats_test[i, 6*no_fs + fs] = max(profits_test[i, j] for j in grouping[fs])
                 instance_feats_test[i, 7*no_fs + fs] = sum(weights_test[i, j] for j in grouping[fs])/sum(weights_test[i, j] for j in range(no_items))
                 instance_feats_test[i, 8*no_fs + fs] = sum(profits_test[i, j] for j in grouping[fs])/sum(profits_test[i, j] for j in range(no_items))
-                instance_feats_test[i, 9*no_fs + fs] = instance_feats_test[i, 1*no_fs + fs]/(sum(profits_test[i,j] for j in range(no_items))/sum(weights_test[i,j] for j in range(no_items)))
+                # instance_feats_test[i, 9*no_fs + fs] = instance_feats_test[i, 1*no_fs + fs]/(sum(profits_test[i,j] for j in range(no_items))/sum(weights_test[i,j] for j in range(no_items)))
+                instance_feats_test[i, 9*no_fs + fs] = instance_feats_test[i, fs]/(sum(profits_test[i,j] for j in range(no_items))/sum(weights_test[i,j] for j in range(no_items)))
             dict_instance_feats[fs], dict_instance_feats[1*no_fs + fs] = "p/w", "sum_w"
             dict_instance_feats[2*no_fs + fs], dict_instance_feats[3*no_fs + fs] = "min_w", "max_w"
             dict_instance_feats[4*no_fs + fs], dict_instance_feats[5*no_fs + fs] = "sum_p", "min_p"
             dict_instance_feats[6*no_fs + fs] = "max_p"
-            dict_instance_feats[6*no_fs + fs] = "w_vs"
-            dict_instance_feats[6*no_fs + fs] = "p_vs"
-            dict_instance_feats[6*no_fs + fs] = "pw_vs"
+            dict_instance_feats[7*no_fs + fs] = "w_vs"
+            dict_instance_feats[8*no_fs + fs] = "p_vs"
+            dict_instance_feats[9*no_fs + fs] = "pw_vs"
     if if_parameter == "all":
         for i in range(no_train):
             instance_feats_train[i, 9*no_fs + no_fs:9*no_fs + no_fs+no_items] = weights_train[i,:]
@@ -185,7 +190,7 @@ def solve_lr_knapsack(instance, time_limit, sparsity_param=2, global_k=0, column
     m.Params.Threads = 1
 
     beta = m.addVars(FS, FI, vtype=GRB.CONTINUOUS, lb=-GRB.INFINITY, name="beta")
-    bias = m.addVars(FS, vtype=GRB.CONTINUOUS, ub=1, name="bias")
+    bias = m.addVars(FS, vtype=GRB.CONTINUOUS, lb=-GRB.INFINITY, name="bias")
     b = m.addVars(N, FS, vtype=GRB.CONTINUOUS, ub=1, name="b")
     x = m.addVars(N, n, vtype=GRB.BINARY, name="x")
     s = m.addVars(FS, FI, vtype=GRB.BINARY, name="s")
@@ -271,10 +276,17 @@ def solve_lr_knapsack_heu_lasso(instance, alpha, sparsity_param=2, global_k=0, c
     b_true = pp_heu(instance)
 
     # train a lasso model tp predict b
-    lasso = Lasso(alpha=alpha)
-    lasso.fit(feat_matrix, b_true)
+    if column_k >= 0.5:
+        lasso = MultiTaskLasso(alpha=alpha)
+    else:
+        lasso = Lasso(alpha=alpha)
+    scaler = MinMaxScaler()
+    scaler.fit(feat_matrix)
+    feat_matrix_scaled = scaler.transform(feat_matrix)
+    lasso.fit(feat_matrix_scaled, b_true)
     beta = lasso.coef_
     bias = lasso.intercept_
+
     beta_sparse = np.zeros(beta.shape)
 
     if column_k >= 0.5:
@@ -303,7 +315,37 @@ def solve_lr_knapsack_heu_lasso(instance, alpha, sparsity_param=2, global_k=0, c
 
     predictor = LRPredictor(beta_sparse, bias)
 
-    return predictor
+    # post-optimize the predictor
+    predictor_post = refine_lasso_predictor(instance, predictor)
+
+    return predictor_post
+
+
+def refine_lasso_predictor(instance, predictor):
+    # train a linear predictor only using the same parameters as the given predictor
+    b_true = pp_heu(instance)
+    b_true_arr = np.array(b_true)
+
+    no_sc = len(instance.N)
+    no_fs, no_if = predictor.beta.shape
+    lr_models_coeff, lr_models_biases = [], []
+
+    for fs_idx in range(no_fs):
+        ifs_mod = np.zeros(instance.ifs.shape)
+        for if_idx in range(no_if):
+            if predictor.beta[fs_idx, if_idx] > 0.00001 or predictor.beta[fs_idx, if_idx] < -0.00001:
+                for sc_idx in range(no_sc):
+                    ifs_mod[sc_idx, if_idx] = instance.ifs[sc_idx, if_idx]
+
+        lr_model = LinearRegression().fit(ifs_mod, b_true_arr[:, fs_idx])
+        lr_models_coeff.append(lr_model.coef_)
+        lr_models_biases.append(lr_model.intercept_)
+
+    beta_new = np.array(lr_models_coeff)
+    bias_new = np.array(lr_models_biases)
+    new_predictor = LRPredictor(beta_new, bias_new)
+
+    return new_predictor
 
 
 def evaluate_lr(instance, predictor):
@@ -480,7 +522,7 @@ def solve_dt_knapsack(instance):
 
 
 def solve_single_instances(instance):
-    # solve a single Knapsack instanve
+    # solve a single Knapsack instance
     feat_matrix, budgets, FI, FS, grp, n, N, p, w = instance.get_params()
     objective_all = 0.0
 
@@ -589,12 +631,12 @@ def execute_exact(no_train, no_test, no_items, no_fs, seed, sparsity, time_limit
                 "obj_tr_one_meta": obj_tr_one_meta, "gap_one_meta": gap_one_meta, "time_one_meta": time_one_meta,
                 "obj_te_one_meta": obj_te_one_meta,
                 "obj_single_opt_tr": obj_single_opt_tr, "obj_single_opt_te": obj_single_opt_te,
-                "coefficients_lr_ex": lr_predictor_ex.beta.tolist(), "instance_feats_dict": tr.ifs_dict}
+                "coefficients_lr_ex": lr_predictor_ex.beta.tolist(), "bias_lr_ex": lr_predictor_ex.bias.tolist(),
+                "instance_feats_dict": tr.ifs_dict}
     str_file = str(str(no_train) + str(no_test) + str(no_items) + str(no_fs) + str(seed) + str(sparsity)
                    + str(if_parameter) + str(global_k) + str(column_k))
     with open("r_ex_" + str_file + "_x.json", "w") as file:
         json.dump(res_dict, file)
-    print(":)")
 
 
 def execute_lasso(no_train, no_test, no_items, no_fs, seed, sparsity, if_parameter, global_k, column_k):
@@ -602,9 +644,9 @@ def execute_lasso(no_train, no_test, no_items, no_fs, seed, sparsity, if_paramet
     if global_k >= 0.5 and column_k >= 0.5:
         raise NotImplementedError
     # values for alpha found by numerical experiments, see file "finding_alpha.py"
-    dict_alpha = {('glob', 2.0): 50.0, ('glob', 4.0): 25.0, ('glob', 8.0): 15.0, ('glob', 16.0): 10.0,
-                  ('glob', 24.0): 2.0, ('col', 1.0): 50.0, ('col', 2.0): 25.0, ('col', 4.0): 25.0, ('col', 6.0): 10.0,
-                  ('row', 1.0): 50.0, ('row', 2.0): 20.0, ('row', 4.0): 15.0, ('row', 6.0): 5.0}
+    dict_alpha = {('col', 1.0): 2.0, ('col', 2.0): 2.0, ('col', 4.0): 0.5, ('col', 6.0): 0.5, ('glob', 4.0): 1.0,
+                  ('glob', 8.0): 0.5, ('glob', 16.0): 0.5, ('glob', 24.0): 0.5, ('row', 1.0): 0.5, ('row', 2.0): 0.5,
+                  ('row', 4.0): 0.5, ('row', 6.0): 0.5}
     if global_k >= 0.5:
         alpha = dict_alpha[("glob", sparsity)]
     elif column_k > 0.5:
@@ -615,7 +657,7 @@ def execute_lasso(no_train, no_test, no_items, no_fs, seed, sparsity, if_paramet
     tr, te = make_instance(no_train, no_test, no_items, no_fs, seed, if_parameter=if_parameter)
     # do heuristic lasso
     time_start_lr_lasso = time.time()
-    lr_predictor_lasso = solve_lr_knapsack_heu_lasso(tr, alpha, sparsity_param=sparsity,global_k=global_k,column_k=column_k)
+    lr_predictor_lasso = solve_lr_knapsack_heu_lasso(tr, alpha, sparsity_param=sparsity, global_k=global_k, column_k=column_k)
     time_lr_lasso = time.time() - time_start_lr_lasso
     obj_tr_lr_lasso = evaluate_lr(tr, lr_predictor_lasso)
     obj_te_lr_lasso = evaluate_lr(te, lr_predictor_lasso)
@@ -627,10 +669,11 @@ def execute_lasso(no_train, no_test, no_items, no_fs, seed, sparsity, if_paramet
                 "sparsity": sparsity, "if_parameter": if_parameter, "global_k": global_k, "column_k": column_k,
                 "obj_tr_lr_lasso": obj_tr_lr_lasso, "obj_te_lr_lasso": obj_te_lr_lasso, "time_lr_lasso": time_lr_lasso,
                 "obj_single_opt_tr": obj_single_opt_tr, "obj_single_opt_te": obj_single_opt_te, "alpha": alpha,
-                "coefficients_lr_lasso": lr_predictor_lasso.beta.tolist(), "instance_feats_dict": tr.ifs_dict}
-    str_file = str(str(no_train) + str(no_test) + str(no_items) + str(no_fs) + str(seed) + str(sparsity)
+                "coefficients_lr_lasso": lr_predictor_lasso.beta.tolist(), "bias_lr_lassp": lr_predictor_lasso.bias.tolist(),
+                "instance_feats_dict": tr.ifs_dict}
+
+    str_file = str(str(no_train) + str(no_test) + str(no_items) + str(no_fs) + "_" + str(seed) + "_" + str(sparsity)
                    + str(if_parameter) + str(global_k) + str(column_k))
-    with open("r_heu_" + str_file + "_x.json", "w") as file:
+    with open("r_heu_re_" + str_file + "_x.json", "w") as file:
         json.dump(res_dict, file)
-    print(":)")
 
